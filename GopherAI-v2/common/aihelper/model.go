@@ -316,6 +316,30 @@ type MCPModel struct {
 	mcpClient  *client.Client
 	username   string
 	mcpBaseURL string
+	allowTools map[string]struct{}
+}
+
+func buildAllowedToolsFromEnv() map[string]struct{} {
+	raw := os.Getenv("MCP_ALLOWED_TOOLS")
+	if raw == "" {
+		return map[string]struct{}{
+			"get_weather": {},
+		}
+	}
+
+	tools := make(map[string]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		tool := strings.TrimSpace(item)
+		if tool != "" {
+			tools[tool] = struct{}{}
+		}
+	}
+
+	// 防止错误配置导致空白名单，回退到默认工具
+	if len(tools) == 0 {
+		tools["get_weather"] = struct{}{}
+	}
+	return tools
 }
 
 // NewMCPModel 创建MCP模型实例
@@ -335,12 +359,16 @@ func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
 		return nil, fmt.Errorf("create mcp model failed: %v", err)
 	}
 
-	mcpBaseURL := "http://localhost:8081/mcp"
+	mcpBaseURL := os.Getenv("MCP_BASE_URL")
+	if mcpBaseURL == "" {
+		mcpBaseURL = "http://localhost:8081/mcp"
+	}
 
 	return &MCPModel{
 		llm:        llm,
 		mcpBaseURL: mcpBaseURL,
 		username:   username,
+		allowTools: buildAllowedToolsFromEnv(),
 	}, nil
 }
 
@@ -640,6 +668,16 @@ func (m *MCPModel) parseAIResponse(response string) (*AIToolCall, error) {
 
 // callMCPTool 调用MCP工具
 func (m *MCPModel) callMCPTool(ctx context.Context, client *client.Client, toolName string, args map[string]interface{}) (string, error) {
+	if toolName == "" {
+		return "", fmt.Errorf("tool name is empty")
+	}
+	if _, ok := m.allowTools[toolName]; !ok {
+		return "", fmt.Errorf("tool %q not allowed", toolName)
+	}
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+
 	callToolRequest := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name:      toolName,

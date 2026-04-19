@@ -8,38 +8,55 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-const amapAPIKey = "b050c5d7476435dc6c4b8e8bdb2d2b2f"
-
 type amapResponse struct {
 	Status string `json:"status"`
 	Info   string `json:"info"`
 	Lives  []struct {
-		Province     string `json:"province"`
-		City         string `json:"city"`
-		Weather      string `json:"weather"`
-		Temperature  string `json:"temperature"`
+		Province      string `json:"province"`
+		City          string `json:"city"`
+		Weather       string `json:"weather"`
+		Temperature   string `json:"temperature"`
 		WindDirection string `json:"winddirection"`
-		WindPower    string `json:"windpower"`
-		Humidity     string `json:"humidity"`
-		ReportTime   string `json:"reporttime"`
+		WindPower     string `json:"windpower"`
+		Humidity      string `json:"humidity"`
+		ReportTime    string `json:"reporttime"`
 	} `json:"lives"`
 }
 
-type WeatherAPIClient struct{}
+type WeatherAPIClient struct {
+	apiKey     string
+	httpClient *http.Client
+}
 
 func NewWeatherAPIClient() *WeatherAPIClient {
-	return &WeatherAPIClient{}
+	return &WeatherAPIClient{
+		apiKey: os.Getenv("AMAP_API_KEY"),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
 }
 
 func (c *WeatherAPIClient) GetWeather(ctx context.Context, city string) (string, error) {
+	if c.apiKey == "" {
+		return "", fmt.Errorf("missing AMAP_API_KEY environment variable")
+	}
+	city = strings.TrimSpace(city)
+	if city == "" {
+		return "", fmt.Errorf("city is required")
+	}
+
 	apiURL := fmt.Sprintf(
 		"https://restapi.amap.com/v3/weather/weatherInfo?city=%s&key=%s&extensions=base",
-		url.QueryEscape(city), amapAPIKey,
+		url.QueryEscape(city), c.apiKey,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -47,7 +64,7 @@ func (c *WeatherAPIClient) GetWeather(ctx context.Context, city string) (string,
 		return "", fmt.Errorf("create request failed: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http request failed: %w", err)
 	}
@@ -56,6 +73,9 @@ func (c *WeatherAPIClient) GetWeather(ctx context.Context, city string) (string,
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read response failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("weather api status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result amapResponse
